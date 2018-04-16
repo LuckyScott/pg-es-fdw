@@ -10,6 +10,7 @@ from functools import partial
 import httplib
 import json
 import logging
+import base64
 
 class ElasticsearchFDW (ForeignDataWrapper):
 
@@ -18,8 +19,11 @@ class ElasticsearchFDW (ForeignDataWrapper):
 
         self.host = options.get('host', 'localhost')
         self.port = int(options.get('port', '9200'))
+        self.username = options.get('username', 'elastic')
+        self.password = options.get('password', '')
         self.node = options.get('node', '')
         self.index = options.get('index', '')
+        self.auth = 'Basic %s' % base64.encodestring('%s:%s' % (self.username, self.password))[:-1]
 
         self.columns = columns
 
@@ -30,7 +34,7 @@ class ElasticsearchFDW (ForeignDataWrapper):
         """
 
         conn = httplib.HTTPConnection(self.host, self.port)
-        conn.request("GET", "/%s/%s/_count" % (self.node, self.index))
+        conn.request("GET", "/%s/%s/_count" % (self.node, self.index), headers={'Authorization':self.auth})
         resp = conn.getresponse()
         if not 200 == resp.status:
             return (0, 0)
@@ -42,13 +46,14 @@ class ElasticsearchFDW (ForeignDataWrapper):
 
     def execute(self, quals, columns):
         conn = httplib.HTTPConnection(self.host, self.port)
-        conn.request("GET", "/%s/%s/_search?size=10000" % (self.node, self.index))
+        conn.request("GET", "/%s/%s/_search?size=10000" % (self.node, self.index), headers={'Authorization':self.auth})
         resp = conn.getresponse()
         if not 200 == resp.status:
             yield {}
 
         raw = resp.read()
         data = json.loads(raw)
+        # log2pg('Query DATA values:  %s' % str(data), logging.INFO)
         for hit in data['hits']['hits']:
             row = {}
             for col in columns:
@@ -72,7 +77,7 @@ class ElasticsearchFDW (ForeignDataWrapper):
         content = json.dumps(values)
 
         conn = httplib.HTTPConnection(self.host, self.port)
-        conn.request("PUT", "/%s/%s/%s" % (self.node, self.index, id), content, {'Content-Type': 'application/json'})
+        conn.request("PUT", "/%s/%s/%s" % (self.node, self.index, id), content, {'Content-Type': 'application/json', 'Authorization':self.auth})
         resp = conn.getresponse()
         if not 200 == resp.status:
             return
@@ -98,7 +103,7 @@ class ElasticsearchFDW (ForeignDataWrapper):
 
     def delete(self, id):
         conn = httplib.HTTPConnection(self.host, self.port)
-        conn.request("DELETE", "/%s/%s/%s" % (self.node, self.index, id))
+        conn.request("DELETE", "/%s/%s/%s" % (self.node, self.index, id), headers={'Authorization':self.auth})
         resp = conn.getresponse()
         if not 200 == resp.status:
             log2pg('Failed to delete: %s' % resp.read(), logging.ERROR)
